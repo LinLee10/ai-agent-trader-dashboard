@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; frame-src 'none'; worker-src 'none'; base-uri 'none'; form-action 'none'">
+    <meta name="referrer" content="no-referrer">
+    <meta name="robots" content="noindex,nofollow,noarchive">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#0a1020">
+    <title>AI Agent Trader · Paper Dashboard</title>
+    <link rel="stylesheet" href="./assets/styles.css">
+    <script src="./assets/app.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to dashboard</a>
+    <main id="main" class="shell">
+      <header class="hero" aria-labelledby="page-title">
+        <div>
+          <p class="eyebrow">Autonomous research system</p>
+          <h1 id="page-title">AI Agent Trader</h1>
+          <p class="hero-copy">A transparent view of a tightly bounded Alpaca paper-trading experiment.</p>
+        </div>
+        <div class="status-stack" aria-label="Trading status">
+          <span class="badge badge-paper">Paper Trading</span>
+          <span class="badge badge-disabled">Execution disabled</span>
+        </div>
+      </header>
+
+      <section id="summary-strip" class="summary-strip" aria-label="Current agent status"></section>
+      <section id="metrics" class="metrics-grid" aria-label="Account and performance metrics"></section>
+
+      <section id="cash-state" class="cash-state" aria-live="polite">
+        <div class="cash-icon" aria-hidden="true">C</div>
+        <div>
+          <p class="eyebrow">Intentional current state</p>
+          <h2>The current strategy remains in cash.</h2>
+          <p>No paper trades have been executed yet. Cash is a valid outcome of the frozen candidate-selection policy.</p>
+        </div>
+      </section>
+
+      <div class="dashboard-grid">
+        <section class="panel panel-wide" aria-labelledby="equity-heading">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Account history</p>
+              <h2 id="equity-heading">Equity curve</h2>
+            </div>
+            <p id="equity-context" class="panel-note"></p>
+          </div>
+          <div class="chart-wrap">
+            <canvas id="equity-chart" role="img" aria-label="Account equity history chart"></canvas>
+          </div>
+          <p id="equity-data-summary" class="sr-only"></p>
+          <p id="chart-scale-note" class="chart-note"></p>
+        </section>
+
+        <section class="panel" aria-labelledby="allocation-heading">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Current portfolio</p>
+              <h2 id="allocation-heading">Allocation</h2>
+            </div>
+          </div>
+          <div id="allocation" class="allocation"></div>
+        </section>
+
+        <section class="panel panel-wide" aria-labelledby="signals-heading">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Completed daily data</p>
+              <h2 id="signals-heading">Signals</h2>
+            </div>
+            <p class="panel-note">Informational only · the selected strategy is cash</p>
+          </div>
+          <div id="signals" class="card-grid"></div>
+        </section>
+
+        <section class="panel panel-wide" aria-labelledby="positions-heading">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Broker-reported</p>
+              <h2 id="positions-heading">Open positions</h2>
+            </div>
+          </div>
+          <div id="positions"></div>
+        </section>
+
+        <section class="panel panel-wide" aria-labelledby="activity-heading">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Fill ledger</p>
+              <h2 id="activity-heading">Recent activity</h2>
+            </div>
+          </div>
+          <div id="activity"></div>
+        </section>
+
+        <section class="panel" aria-labelledby="risk-heading">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Deterministic limits</p>
+              <h2 id="risk-heading">Risk controls</h2>
+            </div>
+          </div>
+          <dl id="risk" class="detail-list"></dl>
+        </section>
+
+        <section class="panel" aria-labelledby="health-heading">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Latest successful run</p>
+              <h2 id="health-heading">System health</h2>
+            </div>
+          </div>
+          <dl id="health" class="detail-list"></dl>
+        </section>
+      </div>
+
+      <section class="methodology" aria-labelledby="methodology-heading">
+        <p class="eyebrow">Methodology &amp; disclosure</p>
+        <h2 id="methodology-heading">What this dashboard means</h2>
+        <div id="disclosure" class="disclosure-grid"></div>
+        <p class="method-note">Total account performance comes from Alpaca daily portfolio history. Fill-derived FIFO trading metrics appear only when the complete ledger reconciles to current broker positions. Unavailable values are never estimated.</p>
+      </section>
+    </main>
+    <noscript>This dashboard requires JavaScript to render its local sanitized JSON snapshot.</noscript>
+  </body>
+</html>

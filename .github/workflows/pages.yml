@@ -1,0 +1,193 @@
+name: Deploy public dashboard to Pages
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: github-pages-dashboard
+  cancel-in-progress: false
+
+jobs:
+  verify-static-site:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Require the default branch
+        run: test "$GITHUB_REF" = "refs/heads/master"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify the public artifact allowlist
+        shell: bash
+        run: |
+          set -euo pipefail
+          root_expected="$(printf '%s\n' .git .github README.md site)"
+          root_actual="$(find . -mindepth 1 -maxdepth 1 -exec basename {} \; | LC_ALL=C sort)"
+          test "$root_actual" = "$root_expected"
+          github_files="$(find .github -type f -print | LC_ALL=C sort)"
+          test "$github_files" = ".github/workflows/pages.yml"
+          test -z "$(find README.md .github site -type l -print -quit)"
+          expected="$(printf '%s\n' \
+            .nojekyll \
+            404.html \
+            assets/app.js \
+            assets/styles.css \
+            data/dashboard.json \
+            index.html \
+            robots.txt)"
+          actual="$(find site -type f -print | sed 's#^site/##' | LC_ALL=C sort)"
+          test "$actual" = "$expected"
+          test -z "$(find site -type l -print -quit)"
+          ! grep -RIE '(alpaca[_-]?(api|secret|expected)|apca[_-]?api|account[_-]?(id|fingerprint)|broker[_-]?order[_-]?id|client[_-]?order[_-]?id|activity[_-]?id|/users/|traceback)' site
+      - name: Verify the versioned public JSON contract
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          from datetime import date, datetime
+          from decimal import Decimal, InvalidOperation
+          from pathlib import Path
+
+          data = json.loads(Path("site/data/dashboard.json").read_text(encoding="utf-8"))
+          expected = {
+              "": {"account", "deployment", "disclosure", "equity_curve", "execution_state", "performance", "positions", "public_contract_version", "recent_fills", "risk", "round_trips", "selected_candidate", "selected_strategy", "signals", "system_health", "title", "trading_mode"},
+              "account": {"cash", "equity", "open_positions", "status"},
+              "performance": {"completed_round_trips", "daily_pnl", "fill_count", "filled_orders", "gross_exposure", "gross_traded_notional", "maximum_drawdown", "one_way_turnover", "realized_pnl", "total_pnl", "total_return", "unrealized_pnl", "win_rate"},
+              "metric": {"as_of", "reason", "state", "value"},
+              "equity": {"equity", "profit_loss", "session_date"},
+              "position": {"average_entry_price", "category", "current_price", "market_value", "portfolio_weight", "quantity", "symbol", "unrealized_pnl"},
+              "fill": {"category", "notional", "price", "quantity", "side", "symbol", "timestamp"},
+              "round_trip": {"category", "closed_at", "opened_at", "quantity", "realized_pnl", "symbol"},
+              "signal": {"above_moving_average", "category", "completed_data_session", "current_weight", "eligibility", "momentum_votes", "reason", "symbol", "target_weight"},
+              "risk": {"execution_enabled", "liquidation_threshold", "maximum_gross_exposure", "maximum_position_size", "metals_exposure_limit", "minimum_cash_reserve", "reconciliation_state", "scheduled_shadow_completed", "scheduled_shadow_gate", "scheduled_shadow_required", "strategy_capital_ceiling"},
+              "system_health": {"account_status", "broker_environment", "deployment_version", "doctor", "last_workflow_completion", "market_data", "reconciliation", "strategy_version", "workflow_source"},
+              "deployment": {"data_freshness", "last_successful_update", "public_contract_version", "update_mode"},
+          }
+          def exact(value, name):
+              if not isinstance(value, dict) or set(value) != expected[name]:
+                  raise SystemExit(f"PUBLIC_CONTRACT_{name.upper() or 'ROOT'}_INVALID")
+          exact(data, "")
+          for name in ("account", "performance", "risk", "system_health", "deployment"):
+              exact(data[name], name)
+          for name in ("total_pnl", "total_return", "daily_pnl", "maximum_drawdown", "realized_pnl", "unrealized_pnl", "win_rate", "one_way_turnover", "gross_traded_notional", "gross_exposure"):
+              exact(data["performance"][name], "metric")
+          for name, key in (("equity_curve", "equity"), ("positions", "position"), ("recent_fills", "fill"), ("round_trips", "round_trip"), ("signals", "signal")):
+              if not isinstance(data[name], list):
+                  raise SystemExit(f"PUBLIC_CONTRACT_{name.upper()}_INVALID")
+              for item in data[name]:
+                  exact(item, key)
+          if (
+              data["public_contract_version"] != "1.0"
+              or data["deployment"]["public_contract_version"] != "1.0"
+              or data["trading_mode"] != "Paper Trading"
+              or data["selected_candidate"] != "CASH_ONLY"
+              or data["selected_strategy"] != "cash"
+              or data["execution_state"] != "DISABLED"
+              or data["risk"]["execution_enabled"] is not False
+          ):
+              raise SystemExit("PUBLIC_CONTRACT_IDENTITY_INVALID")
+          def require(condition, code):
+              if not condition:
+                  raise SystemExit(code)
+          def decimal_string(value, code):
+              require(isinstance(value, str), code)
+              try:
+                  number = Decimal(value)
+              except InvalidOperation:
+                  raise SystemExit(code) from None
+              require(number.is_finite(), code)
+          def date_string(value, code):
+              require(isinstance(value, str), code)
+              try:
+                  date.fromisoformat(value)
+              except ValueError:
+                  raise SystemExit(code) from None
+          def aware_datetime_string(value, code):
+              require(isinstance(value, str), code)
+              try:
+                  parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+              except ValueError:
+                  raise SystemExit(code) from None
+              require(parsed.tzinfo is not None and parsed.utcoffset() is not None, code)
+          decimal_fields = ("cash", "equity")
+          for name in decimal_fields:
+              decimal_string(data["account"][name], "PUBLIC_CONTRACT_ACCOUNT_TYPE_INVALID")
+          require(type(data["account"]["open_positions"]) is int and data["account"]["open_positions"] >= 0, "PUBLIC_CONTRACT_ACCOUNT_TYPE_INVALID")
+          require(data["account"]["status"] == "ACTIVE", "PUBLIC_CONTRACT_ACCOUNT_STATUS_INVALID")
+          for name in ("filled_orders", "fill_count"):
+              require(type(data["performance"][name]) is int and data["performance"][name] >= 0, "PUBLIC_CONTRACT_PERFORMANCE_TYPE_INVALID")
+          require(data["performance"]["completed_round_trips"] is None or (type(data["performance"]["completed_round_trips"]) is int and data["performance"]["completed_round_trips"] >= 0), "PUBLIC_CONTRACT_PERFORMANCE_TYPE_INVALID")
+          for name in ("total_pnl", "total_return", "daily_pnl", "maximum_drawdown", "realized_pnl", "unrealized_pnl", "win_rate", "one_way_turnover", "gross_traded_notional", "gross_exposure"):
+              item = data["performance"][name]
+              require(item["state"] in {"available", "unavailable"}, "PUBLIC_CONTRACT_METRIC_STATE_INVALID")
+              require(item["reason"] is None or item["reason"] in {"insufficient_history", "missing_base_value", "external_cashflow", "incomplete_fill_history", "position_reconciliation_failed", "no_completed_round_trips", "zero_equity"}, "PUBLIC_CONTRACT_METRIC_TYPE_INVALID")
+              if item["value"] is not None:
+                  decimal_string(item["value"], "PUBLIC_CONTRACT_METRIC_TYPE_INVALID")
+              if item["as_of"] is not None:
+                  date_string(item["as_of"], "PUBLIC_CONTRACT_METRIC_TYPE_INVALID")
+              require((item["state"] == "available" and item["value"] is not None and item["reason"] is None) or (item["state"] == "unavailable" and item["value"] is None and item["reason"] is not None), "PUBLIC_CONTRACT_METRIC_STATE_INVALID")
+          require(isinstance(data["disclosure"], list) and all(isinstance(item, str) for item in data["disclosure"]), "PUBLIC_CONTRACT_DISCLOSURE_TYPE_INVALID")
+          require(data["title"] == "AI Agent Trader", "PUBLIC_CONTRACT_ROOT_TYPE_INVALID")
+          for item in data["equity_curve"]:
+              date_string(item["session_date"], "PUBLIC_CONTRACT_EQUITY_TYPE_INVALID")
+              decimal_string(item["equity"], "PUBLIC_CONTRACT_EQUITY_TYPE_INVALID")
+              decimal_string(item["profit_loss"], "PUBLIC_CONTRACT_EQUITY_TYPE_INVALID")
+          for item in data["positions"]:
+              require(item["symbol"] in {"GLDM", "SLV", "XLE"} and isinstance(item["category"], str), "PUBLIC_CONTRACT_POSITION_TYPE_INVALID")
+              for name in ("quantity", "market_value", "average_entry_price", "current_price", "unrealized_pnl", "portfolio_weight"):
+                  decimal_string(item[name], "PUBLIC_CONTRACT_POSITION_TYPE_INVALID")
+          for item in data["recent_fills"]:
+              require(item["symbol"] in {"GLDM", "SLV", "XLE"} and item["side"] in {"buy", "sell"}, "PUBLIC_CONTRACT_FILL_TYPE_INVALID")
+              require(isinstance(item["category"], str), "PUBLIC_CONTRACT_FILL_TYPE_INVALID")
+              aware_datetime_string(item["timestamp"], "PUBLIC_CONTRACT_FILL_TYPE_INVALID")
+              for name in ("quantity", "price", "notional"):
+                  decimal_string(item[name], "PUBLIC_CONTRACT_FILL_TYPE_INVALID")
+          for item in data["round_trips"]:
+              require(item["symbol"] in {"GLDM", "SLV", "XLE"}, "PUBLIC_CONTRACT_ROUND_TRIP_TYPE_INVALID")
+              require(isinstance(item["category"], str), "PUBLIC_CONTRACT_ROUND_TRIP_TYPE_INVALID")
+              aware_datetime_string(item["opened_at"], "PUBLIC_CONTRACT_ROUND_TRIP_TYPE_INVALID")
+              aware_datetime_string(item["closed_at"], "PUBLIC_CONTRACT_ROUND_TRIP_TYPE_INVALID")
+              decimal_string(item["quantity"], "PUBLIC_CONTRACT_ROUND_TRIP_TYPE_INVALID")
+              decimal_string(item["realized_pnl"], "PUBLIC_CONTRACT_ROUND_TRIP_TYPE_INVALID")
+          for item in data["signals"]:
+              require(item["symbol"] in {"GLDM", "SLV", "XLE"} and item["eligibility"] in {"entry", "hold", "exit", "ineligible", "cash_only"} and type(item["above_moving_average"]) is bool and type(item["momentum_votes"]) is int, "PUBLIC_CONTRACT_SIGNAL_TYPE_INVALID")
+              require(isinstance(item["category"], str) and isinstance(item["reason"], str), "PUBLIC_CONTRACT_SIGNAL_TYPE_INVALID")
+              date_string(item["completed_data_session"], "PUBLIC_CONTRACT_SIGNAL_TYPE_INVALID")
+              decimal_string(item["current_weight"], "PUBLIC_CONTRACT_SIGNAL_TYPE_INVALID")
+              decimal_string(item["target_weight"], "PUBLIC_CONTRACT_SIGNAL_TYPE_INVALID")
+          require(data["risk"]["execution_enabled"] is False and type(data["risk"]["scheduled_shadow_completed"]) is int and type(data["risk"]["scheduled_shadow_required"]) is int, "PUBLIC_CONTRACT_RISK_TYPE_INVALID")
+          require(data["risk"]["scheduled_shadow_completed"] >= 0 and data["risk"]["scheduled_shadow_required"] >= 0, "PUBLIC_CONTRACT_RISK_TYPE_INVALID")
+          require(data["risk"]["scheduled_shadow_gate"] in {"PENDING", "PASS"} and data["risk"]["reconciliation_state"] == "MATCHED", "PUBLIC_CONTRACT_RISK_TYPE_INVALID")
+          for name in ("strategy_capital_ceiling", "maximum_gross_exposure", "minimum_cash_reserve", "maximum_position_size", "metals_exposure_limit", "liquidation_threshold"):
+              decimal_string(data["risk"][name], "PUBLIC_CONTRACT_RISK_TYPE_INVALID")
+          require(data["system_health"]["doctor"] == "PASS" and data["system_health"]["broker_environment"] == "Alpaca paper" and data["system_health"]["account_status"] == "ACTIVE" and data["system_health"]["market_data"] == "PASS" and data["system_health"]["reconciliation"] == "PASS", "PUBLIC_CONTRACT_HEALTH_TYPE_INVALID")
+          require(data["system_health"]["workflow_source"] in {"manual_dashboard", "paper_read_only_followup", "local_fixture"}, "PUBLIC_CONTRACT_HEALTH_TYPE_INVALID")
+          require(isinstance(data["system_health"]["strategy_version"], str) and isinstance(data["system_health"]["deployment_version"], str), "PUBLIC_CONTRACT_HEALTH_TYPE_INVALID")
+          aware_datetime_string(data["system_health"]["last_workflow_completion"], "PUBLIC_CONTRACT_HEALTH_TYPE_INVALID")
+          require(data["deployment"]["data_freshness"] in {"fresh", "stale"} and data["deployment"]["update_mode"] == "after successful automation runs", "PUBLIC_CONTRACT_DEPLOYMENT_TYPE_INVALID")
+          aware_datetime_string(data["deployment"]["last_successful_update"], "PUBLIC_CONTRACT_DEPLOYMENT_TYPE_INVALID")
+          PY
+      - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: site
+
+  deploy:
+    needs: verify-static-site
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      pages: write
+    steps:
+      - name: Deploy Pages
+        id: deployment
+        uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5.0.0
