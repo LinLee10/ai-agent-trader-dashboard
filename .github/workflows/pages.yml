@@ -44,18 +44,39 @@ jobs:
           test "$actual" = "$expected"
           test -z "$(find site -type l -print -quit)"
           ! grep -RIE '(alpaca[_-]?(api|secret|expected)|apca[_-]?api|account[_-]?(id|fingerprint)|broker[_-]?order[_-]?id|client[_-]?order[_-]?id|activity[_-]?id|/users/|traceback)' site
+          ! grep -RIE '(/home/runner/|/private/|/tmp/|file://|\\users\\|[0-9a-f]{40,64}|[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})' site
       - name: Verify the versioned public JSON contract
         shell: bash
         run: |
           python - <<'PY'
           import json
+          import re
           from datetime import date, datetime
           from decimal import Decimal, InvalidOperation
           from pathlib import Path
 
           data = json.loads(Path("site/data/dashboard.json").read_text(encoding="utf-8"))
+          private_keys = {"account_id", "account_fingerprint", "activity_id", "broker_order_id", "client_order_id", "config_hash", "dataset_hash", "input_data_hash", "intent_hash", "order_id", "plan_hash", "policy_hash", "prepared_hash", "result_hash", "state_hash", "workflow_run_id"}
+          private_string_patterns = (
+              re.compile(r"\b[0-9a-fA-F]{40,64}\b"),
+              re.compile(r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}\b"),
+              re.compile(r"(?:/users/|/home/runner/|/private/|/tmp/|\\users\\|file://|\.env)", re.IGNORECASE),
+              re.compile(r"(?:apca-api-key-id|apca-api-secret-key|authorization:|traceback \(most recent call last\))", re.IGNORECASE),
+          )
+          def reject_private(value):
+              if isinstance(value, dict):
+                  if any(str(key).lower() in private_keys for key in value):
+                      raise SystemExit("PUBLIC_CONTRACT_PRIVATE_KEY_INVALID")
+                  for item in value.values():
+                      reject_private(item)
+              elif isinstance(value, list):
+                  for item in value:
+                      reject_private(item)
+              elif isinstance(value, str) and any(pattern.search(value) for pattern in private_string_patterns):
+                  raise SystemExit("PUBLIC_CONTRACT_PRIVATE_VALUE_INVALID")
+          reject_private(data)
           expected = {
-              "": {"account", "deployment", "disclosure", "equity_curve", "execution_state", "performance", "positions", "public_contract_version", "recent_fills", "risk", "round_trips", "selected_candidate", "selected_strategy", "signals", "system_health", "title", "trading_mode"},
+              "": {"account", "deployment", "disclosure", "equity_curve", "execution_state", "paper_experiment", "performance", "positions", "public_contract_version", "recent_fills", "risk", "round_trips", "selected_candidate", "selected_strategy", "signals", "system_health", "title", "trading_mode"},
               "account": {"cash", "equity", "open_positions", "status"},
               "performance": {"completed_round_trips", "daily_pnl", "fill_count", "filled_orders", "gross_exposure", "gross_traded_notional", "maximum_drawdown", "one_way_turnover", "realized_pnl", "total_pnl", "total_return", "unrealized_pnl", "win_rate"},
               "metric": {"as_of", "reason", "state", "value"},
@@ -67,6 +88,11 @@ jobs:
               "risk": {"execution_enabled", "liquidation_threshold", "maximum_gross_exposure", "maximum_position_size", "metals_exposure_limit", "minimum_cash_reserve", "reconciliation_state", "scheduled_shadow_completed", "scheduled_shadow_gate", "scheduled_shadow_required", "strategy_capital_ceiling"},
               "system_health": {"account_status", "broker_environment", "deployment_version", "doctor", "last_workflow_completion", "market_data", "reconciliation", "strategy_version", "workflow_source"},
               "deployment": {"data_freshness", "last_successful_update", "public_contract_version", "update_mode"},
+              "paper_experiment": {"benchmarks", "canary_status", "classification", "completed_sessions", "current_allocation", "current_positions", "current_target", "elapsed_market_sessions", "execution_enabled", "experiment_id", "experiment_start", "experiment_status", "initial_performance_checkpoint", "latest_action_reason", "latest_reconciliation_state", "latest_risk_decision", "live_approved", "operational_checkpoint", "performance", "recent_fills", "result_boundaries", "strategy", "stronger_evidence_checkpoint", "target_state"},
+              "paper_performance": {"completed_round_trips", "daily_pnl", "fill_count", "maximum_drawdown", "realized_pnl", "total_pnl", "total_return", "trade_count", "unrealized_pnl"},
+              "checkpoint": {"completed_sessions", "progress", "required_sessions", "status"},
+              "target": {"rank", "symbol", "target_notional"},
+              "benchmark": {"name", "return_metric"},
           }
           def exact(value, name):
               if not isinstance(value, dict) or set(value) != expected[name]:
@@ -74,6 +100,10 @@ jobs:
           exact(data, "")
           for name in ("account", "performance", "risk", "system_health", "deployment"):
               exact(data[name], name)
+          exact(data["paper_experiment"], "paper_experiment")
+          exact(data["paper_experiment"]["performance"], "paper_performance")
+          for name in ("operational_checkpoint", "initial_performance_checkpoint", "stronger_evidence_checkpoint"):
+              exact(data["paper_experiment"][name], "checkpoint")
           for name in ("total_pnl", "total_return", "daily_pnl", "maximum_drawdown", "realized_pnl", "unrealized_pnl", "win_rate", "one_way_turnover", "gross_traded_notional", "gross_exposure"):
               exact(data["performance"][name], "metric")
           for name, key in (("equity_curve", "equity"), ("positions", "position"), ("recent_fills", "fill"), ("round_trips", "round_trip"), ("signals", "signal")):
@@ -82,8 +112,8 @@ jobs:
               for item in data[name]:
                   exact(item, key)
           if (
-              data["public_contract_version"] != "1.0"
-              or data["deployment"]["public_contract_version"] != "1.0"
+              data["public_contract_version"] != "2.0"
+              or data["deployment"]["public_contract_version"] != "2.0"
               or data["trading_mode"] != "Paper Trading"
               or data["selected_candidate"] != "CASH_ONLY"
               or data["selected_strategy"] != "cash"
@@ -91,6 +121,17 @@ jobs:
               or data["risk"]["execution_enabled"] is not False
           ):
               raise SystemExit("PUBLIC_CONTRACT_IDENTITY_INVALID")
+          paper = data["paper_experiment"]
+          if (
+              paper["experiment_id"] != "paper-forward-v1"
+              or paper["strategy"] != "Simple Long-Horizon Momentum"
+              or paper["classification"] != "PAPER_CHALLENGER_ONLY"
+              or paper["live_approved"] is not False
+              or paper["experiment_status"] not in {"PENDING_SHADOW_GATE", "READY_FOR_CANARY", "ACTIVE", "HALTED"}
+              or paper["canary_status"] not in {"PENDING", "PASS", "HALTED"}
+              or type(paper["execution_enabled"]) is not bool
+          ):
+              raise SystemExit("PUBLIC_CONTRACT_PAPER_IDENTITY_INVALID")
           def require(condition, code):
               if not condition:
                   raise SystemExit(code)
@@ -101,12 +142,14 @@ jobs:
               except InvalidOperation:
                   raise SystemExit(code) from None
               require(number.is_finite(), code)
+              return number
           def date_string(value, code):
               require(isinstance(value, str), code)
               try:
-                  date.fromisoformat(value)
+                  parsed = date.fromisoformat(value)
               except ValueError:
                   raise SystemExit(code) from None
+              return parsed
           def aware_datetime_string(value, code):
               require(isinstance(value, str), code)
               try:
@@ -114,6 +157,32 @@ jobs:
               except ValueError:
                   raise SystemExit(code) from None
               require(parsed.tzinfo is not None and parsed.utcoffset() is not None, code)
+              return parsed
+          metric_reasons = {"insufficient_history", "missing_base_value", "external_cashflow", "incomplete_fill_history", "position_reconciliation_failed", "no_completed_round_trips", "zero_equity", "experiment_not_started", "benchmark_unavailable"}
+          def metric_object(item, code, *, require_as_of=False):
+              exact(item, "metric")
+              require(item["state"] in {"available", "unavailable"}, code)
+              require(item["reason"] is None or item["reason"] in metric_reasons, code)
+              if item["state"] == "available":
+                  decimal_string(item["value"], code)
+                  require(item["reason"] is None, code)
+                  require(not require_as_of or item["as_of"] is not None, code)
+                  if item["as_of"] is not None:
+                      date_string(item["as_of"], code)
+              else:
+                  require(item["value"] is None and item["reason"] is not None and item["as_of"] is None, code)
+          def position_object(item, code):
+              exact(item, "position")
+              require(item["symbol"] in {"GLDM", "SLV", "XLE"} and isinstance(item["category"], str) and item["category"], code)
+              for field in ("quantity", "market_value", "average_entry_price", "current_price", "unrealized_pnl", "portfolio_weight"):
+                  decimal_string(item[field], code)
+          def fill_object(item, code):
+              exact(item, "fill")
+              require(item["symbol"] in {"GLDM", "SLV", "XLE"} and item["side"] in {"buy", "sell"}, code)
+              require(isinstance(item["category"], str) and item["category"], code)
+              aware_datetime_string(item["timestamp"], code)
+              for field in ("quantity", "price", "notional"):
+                  decimal_string(item[field], code)
           decimal_fields = ("cash", "equity")
           for name in decimal_fields:
               decimal_string(data["account"][name], "PUBLIC_CONTRACT_ACCOUNT_TYPE_INVALID")
@@ -123,14 +192,68 @@ jobs:
               require(type(data["performance"][name]) is int and data["performance"][name] >= 0, "PUBLIC_CONTRACT_PERFORMANCE_TYPE_INVALID")
           require(data["performance"]["completed_round_trips"] is None or (type(data["performance"]["completed_round_trips"]) is int and data["performance"]["completed_round_trips"] >= 0), "PUBLIC_CONTRACT_PERFORMANCE_TYPE_INVALID")
           for name in ("total_pnl", "total_return", "daily_pnl", "maximum_drawdown", "realized_pnl", "unrealized_pnl", "win_rate", "one_way_turnover", "gross_traded_notional", "gross_exposure"):
-              item = data["performance"][name]
-              require(item["state"] in {"available", "unavailable"}, "PUBLIC_CONTRACT_METRIC_STATE_INVALID")
-              require(item["reason"] is None or item["reason"] in {"insufficient_history", "missing_base_value", "external_cashflow", "incomplete_fill_history", "position_reconciliation_failed", "no_completed_round_trips", "zero_equity"}, "PUBLIC_CONTRACT_METRIC_TYPE_INVALID")
-              if item["value"] is not None:
-                  decimal_string(item["value"], "PUBLIC_CONTRACT_METRIC_TYPE_INVALID")
-              if item["as_of"] is not None:
-                  date_string(item["as_of"], "PUBLIC_CONTRACT_METRIC_TYPE_INVALID")
-              require((item["state"] == "available" and item["value"] is not None and item["reason"] is None) or (item["state"] == "unavailable" and item["value"] is None and item["reason"] is not None), "PUBLIC_CONTRACT_METRIC_STATE_INVALID")
+              metric_object(data["performance"][name], "PUBLIC_CONTRACT_METRIC_STATE_INVALID")
+          for name in ("total_pnl", "daily_pnl", "total_return", "realized_pnl", "unrealized_pnl", "maximum_drawdown"):
+              metric_object(paper["performance"][name], "PUBLIC_CONTRACT_PAPER_METRIC_INVALID")
+          for name in ("trade_count", "fill_count"):
+              require(type(paper["performance"][name]) is int and paper["performance"][name] >= 0, "PUBLIC_CONTRACT_PAPER_PERFORMANCE_INVALID")
+          require(paper["performance"]["completed_round_trips"] is None or (type(paper["performance"]["completed_round_trips"]) is int and paper["performance"]["completed_round_trips"] >= 0), "PUBLIC_CONTRACT_PAPER_PERFORMANCE_INVALID")
+          require(type(paper["completed_sessions"]) is int and paper["completed_sessions"] >= 0, "PUBLIC_CONTRACT_PAPER_SESSION_INVALID")
+          require(type(paper["elapsed_market_sessions"]) is int and paper["elapsed_market_sessions"] >= paper["completed_sessions"], "PUBLIC_CONTRACT_PAPER_SESSION_INVALID")
+          checkpoint_requirements = {
+              "operational_checkpoint": 20,
+              "initial_performance_checkpoint": 60,
+              "stronger_evidence_checkpoint": 120,
+          }
+          for name, required in checkpoint_requirements.items():
+              checkpoint = paper[name]
+              progress = decimal_string(checkpoint["progress"], "PUBLIC_CONTRACT_CHECKPOINT_INVALID")
+              expected_progress = min(Decimal("1"), Decimal(paper["completed_sessions"]) / Decimal(required))
+              expected_status = "COMPLETE" if paper["completed_sessions"] >= required else "PENDING"
+              require(checkpoint["completed_sessions"] == paper["completed_sessions"] and checkpoint["required_sessions"] == required, "PUBLIC_CONTRACT_CHECKPOINT_INVALID")
+              require(progress == expected_progress and checkpoint["status"] == expected_status, "PUBLIC_CONTRACT_CHECKPOINT_INVALID")
+          if paper["experiment_start"] is not None:
+              aware_datetime_string(paper["experiment_start"], "PUBLIC_CONTRACT_PAPER_START_INVALID")
+          require(paper["experiment_status"] != "ACTIVE" or (paper["canary_status"] == "PASS" and paper["experiment_start"] is not None), "PUBLIC_CONTRACT_PAPER_START_INVALID")
+          require(paper["canary_status"] != "PASS" or paper["experiment_start"] is not None, "PUBLIC_CONTRACT_PAPER_START_INVALID")
+          require(not paper["execution_enabled"] or (paper["experiment_status"] in {"READY_FOR_CANARY", "ACTIVE"} and paper["canary_status"] != "HALTED"), "PUBLIC_CONTRACT_PAPER_EXECUTION_INVALID")
+          for name in ("latest_action_reason", "latest_risk_decision", "latest_reconciliation_state"):
+              require(isinstance(paper[name], str) and paper[name], "PUBLIC_CONTRACT_PAPER_STATUS_INVALID")
+          require(paper["target_state"] in {"UNAVAILABLE", "CASH", "ALLOCATED"}, "PUBLIC_CONTRACT_TARGET_INVALID")
+          require(paper["latest_action_reason"] in {"GATE_PENDING", "WAITING_FOR_CANARY", "STRATEGY_CASH", "NO_REBALANCE", "CANARY_PASS", "FILL_RECONCILED", "READ_ONLY", "HALTED"}, "PUBLIC_CONTRACT_PAPER_STATUS_INVALID")
+          require(paper["latest_risk_decision"] in {"NOT_EVALUATED", "APPROVED", "REDUCE_ONLY", "REJECTED"}, "PUBLIC_CONTRACT_PAPER_STATUS_INVALID")
+          require(paper["latest_reconciliation_state"] in {"STARTING_STATE_VERIFIED", "PRE_SUBMIT_EXACT", "EXACT", "HALTED", "READ_ONLY"}, "PUBLIC_CONTRACT_PAPER_STATUS_INVALID")
+          require(paper["result_boundaries"] == ["BACKTEST: retrospective historical research only", "SHADOW: read-only operational evidence", "PAPER FORWARD: simulated Alpaca fake-money results", "LIVE: unsupported and not approved"], "PUBLIC_CONTRACT_BOUNDARIES_INVALID")
+          for item in paper["current_target"]:
+              exact(item, "target")
+              require(item["symbol"] in {"GLDM", "SLV", "XLE"} and type(item["rank"]) is int and item["rank"] > 0, "PUBLIC_CONTRACT_TARGET_INVALID")
+              require(decimal_string(item["target_notional"], "PUBLIC_CONTRACT_TARGET_INVALID") > 0, "PUBLIC_CONTRACT_TARGET_INVALID")
+          target_symbols = [item["symbol"] for item in paper["current_target"]]
+          target_ranks = [item["rank"] for item in paper["current_target"]]
+          require(len(paper["current_target"]) <= 2 and len(set(target_symbols)) == len(target_symbols) and target_ranks == list(range(1, len(target_ranks) + 1)), "PUBLIC_CONTRACT_TARGET_INVALID")
+          require((paper["target_state"] in {"UNAVAILABLE", "CASH"} and not paper["current_target"]) or (paper["target_state"] == "ALLOCATED" and bool(paper["current_target"])), "PUBLIC_CONTRACT_TARGET_INVALID")
+          for name in ("current_allocation", "current_positions"):
+              require(isinstance(paper[name], list) and len(paper[name]) <= 2, "PUBLIC_CONTRACT_PAPER_POSITION_INVALID")
+              for item in paper[name]:
+                  position_object(item, "PUBLIC_CONTRACT_PAPER_POSITION_INVALID")
+              symbols = [item["symbol"] for item in paper[name]]
+              require(symbols == sorted(set(symbols)), "PUBLIC_CONTRACT_PAPER_POSITION_INVALID")
+          require(paper["current_allocation"] == paper["current_positions"], "PUBLIC_CONTRACT_PAPER_POSITION_INVALID")
+          require(isinstance(paper["recent_fills"], list) and len(paper["recent_fills"]) <= 20, "PUBLIC_CONTRACT_PAPER_FILL_INVALID")
+          for item in paper["recent_fills"]:
+              fill_object(item, "PUBLIC_CONTRACT_PAPER_FILL_INVALID")
+          benchmark_names = ["cash", "equal_weight_buy_and_hold_price_return_gldm_slv_xle", "production_cash_only", "paper_forward_executed", "paper_forward_frictionless_shadow"]
+          require(isinstance(paper["benchmarks"], list) and [item.get("name") if isinstance(item, dict) else None for item in paper["benchmarks"]] == benchmark_names, "PUBLIC_CONTRACT_BENCHMARK_INVALID")
+          for item in paper["benchmarks"]:
+              exact(item, "benchmark")
+              metric_object(item["return_metric"], "PUBLIC_CONTRACT_BENCHMARK_INVALID", require_as_of=True)
+          benchmark_metrics = [item["return_metric"] for item in paper["benchmarks"]]
+          if paper["experiment_start"] is None:
+              require(all(item["state"] == "unavailable" for item in benchmark_metrics), "PUBLIC_CONTRACT_BENCHMARK_INVALID")
+          else:
+              require(all(benchmark_metrics[index]["state"] == "available" for index in (0, 1, 2, 4)), "PUBLIC_CONTRACT_BENCHMARK_INVALID")
+              available_as_of = {item["as_of"] for item in benchmark_metrics if item["state"] == "available"}
+              require(len(available_as_of) == 1, "PUBLIC_CONTRACT_BENCHMARK_INVALID")
           require(isinstance(data["disclosure"], list) and all(isinstance(item, str) for item in data["disclosure"]), "PUBLIC_CONTRACT_DISCLOSURE_TYPE_INVALID")
           require(data["title"] == "AI Agent Trader", "PUBLIC_CONTRACT_ROOT_TYPE_INVALID")
           for item in data["equity_curve"]:
@@ -166,7 +289,7 @@ jobs:
           for name in ("strategy_capital_ceiling", "maximum_gross_exposure", "minimum_cash_reserve", "maximum_position_size", "metals_exposure_limit", "liquidation_threshold"):
               decimal_string(data["risk"][name], "PUBLIC_CONTRACT_RISK_TYPE_INVALID")
           require(data["system_health"]["doctor"] == "PASS" and data["system_health"]["broker_environment"] == "Alpaca paper" and data["system_health"]["account_status"] == "ACTIVE" and data["system_health"]["market_data"] == "PASS" and data["system_health"]["reconciliation"] == "PASS", "PUBLIC_CONTRACT_HEALTH_TYPE_INVALID")
-          require(data["system_health"]["workflow_source"] in {"manual_dashboard", "paper_read_only_followup", "local_fixture"}, "PUBLIC_CONTRACT_HEALTH_TYPE_INVALID")
+          require(data["system_health"]["workflow_source"] in {"manual_dashboard", "paper_read_only_followup", "paper_forward_followup", "local_fixture"}, "PUBLIC_CONTRACT_HEALTH_TYPE_INVALID")
           require(isinstance(data["system_health"]["strategy_version"], str) and isinstance(data["system_health"]["deployment_version"], str), "PUBLIC_CONTRACT_HEALTH_TYPE_INVALID")
           aware_datetime_string(data["system_health"]["last_workflow_completion"], "PUBLIC_CONTRACT_HEALTH_TYPE_INVALID")
           require(data["deployment"]["data_freshness"] in {"fresh", "stale"} and data["deployment"]["update_mode"] == "after successful automation runs", "PUBLIC_CONTRACT_DEPLOYMENT_TYPE_INVALID")

@@ -7,6 +7,7 @@ const TOP_LEVEL_KEYS = [
   "equity_curve",
   "execution_state",
   "performance",
+  "paper_experiment",
   "positions",
   "public_contract_version",
   "recent_fills",
@@ -61,7 +62,7 @@ function validateSnapshot(data) {
     throw new Error("dashboard contract keys are invalid");
   }
   if (
-    root.public_contract_version !== "1.0" ||
+    root.public_contract_version !== "2.0" ||
     root.trading_mode !== "Paper Trading" ||
     root.selected_candidate !== "CASH_ONLY" ||
     root.selected_strategy !== "cash" ||
@@ -74,8 +75,38 @@ function validateSnapshot(data) {
   requireObject(root.risk, "risk");
   requireObject(root.system_health, "system health");
   requireObject(root.deployment, "deployment");
+  const experiment = requireObject(root.paper_experiment, "paper experiment");
+  if (!["UNAVAILABLE", "CASH", "ALLOCATED"].includes(experiment.target_state)) {
+    throw new Error("paper experiment target state is invalid");
+  }
+  if (
+    experiment.experiment_id !== "paper-forward-v1" ||
+    experiment.strategy !== "Simple Long-Horizon Momentum" ||
+    experiment.classification !== "PAPER_CHALLENGER_ONLY" ||
+    experiment.live_approved !== false
+  ) {
+    throw new Error("paper experiment identity is invalid");
+  }
+  requireObject(experiment.performance, "paper experiment performance");
+  requireObject(experiment.operational_checkpoint, "operational checkpoint");
+  requireObject(experiment.initial_performance_checkpoint, "performance checkpoint");
+  requireObject(experiment.stronger_evidence_checkpoint, "evidence checkpoint");
+  if (
+    !Number.isInteger(experiment.completed_sessions) ||
+    !Number.isInteger(experiment.elapsed_market_sessions) ||
+    experiment.completed_sessions < 0 ||
+    experiment.completed_sessions > experiment.elapsed_market_sessions
+  ) {
+    throw new Error("paper experiment session clocks are invalid");
+  }
+  requireArray(experiment.current_target, "paper target", 2);
+  requireArray(experiment.current_allocation, "paper allocation", 2);
+  requireArray(experiment.current_positions, "paper positions", 2);
+  requireArray(experiment.recent_fills, "paper fills", 20);
+  requireArray(experiment.benchmarks, "paper benchmarks", 5);
+  requireArray(experiment.result_boundaries, "result boundaries", 4);
   requireArray(root.equity_curve, "equity curve", 5000);
-  requireArray(root.positions, "positions", 3);
+  requireArray(root.positions, "positions", 2);
   requireArray(root.recent_fills, "recent fills", 20);
   requireArray(root.round_trips, "round trips", 20);
   requireArray(root.signals, "signals", 3);
@@ -150,6 +181,8 @@ const REASON_LABELS = {
   position_reconciliation_failed: "Ledger reconciliation unavailable",
   no_completed_round_trips: "No completed round trips",
   zero_equity: "Equity is zero",
+  experiment_not_started: "Experiment has not started",
+  benchmark_unavailable: "Prospective benchmark unavailable",
 };
 
 function metricDisplay(metric, kind) {
@@ -183,7 +216,7 @@ function renderSummary(data) {
   clear(target);
   const items = [
     ["Selected strategy", `${data.selected_candidate} · ${data.selected_strategy} · ${data.system_health.strategy_version}`],
-    ["Execution state", data.execution_state],
+    ["Paper experiment", `${data.paper_experiment.experiment_status} · canary ${data.paper_experiment.canary_status}`],
     ["Last successful update", timestamp(data.deployment.last_successful_update)],
     ["Data freshness", data.deployment.data_freshness === "fresh" ? "Fresh snapshot" : "Stale snapshot"],
   ];
@@ -202,21 +235,24 @@ function renderSummary(data) {
 function renderMetrics(data) {
   const target = document.getElementById("metrics");
   clear(target);
+  const paper = data.paper_experiment.performance;
   const metrics = [
     ["Equity", { state: "available", value: data.account.equity }, "money"],
     ["Cash", { state: "available", value: data.account.cash }, "money"],
-    ["Total P&L", data.performance.total_pnl, "money"],
-    ["Total return", data.performance.total_return, "percent"],
-    ["Daily P&L", data.performance.daily_pnl, "money"],
-    ["Maximum drawdown", data.performance.maximum_drawdown, "percent"],
+    ["Paper-forward P&L", paper.total_pnl, "money"],
+    ["Paper-forward return", paper.total_return, "percent"],
+    ["Daily paper P&L", paper.daily_pnl, "money"],
+    ["Realized paper P&L", paper.realized_pnl, "money"],
+    ["Unrealized paper P&L", paper.unrealized_pnl, "money"],
+    ["Paper max drawdown", paper.maximum_drawdown, "percent"],
     ["Open positions", { state: "available", value: String(data.account.open_positions) }, "count"],
-    ["Filled orders", { state: "available", value: String(data.performance.filled_orders) }, "count"],
-    ["Fill count", { state: "available", value: String(data.performance.fill_count) }, "count"],
+    ["Filled orders", { state: "available", value: String(paper.trade_count) }, "count"],
+    ["Fill count", { state: "available", value: String(paper.fill_count) }, "count"],
     [
       "Completed round trips",
-      data.performance.completed_round_trips === null
+      paper.completed_round_trips === null
         ? { state: "unavailable", value: null, reason: "incomplete_fill_history" }
-        : { state: "available", value: String(data.performance.completed_round_trips) },
+        : { state: "available", value: String(paper.completed_round_trips) },
       "count",
     ],
   ];
@@ -224,7 +260,11 @@ function renderMetrics(data) {
     const shown = metricDisplay(metric, kind);
     const card = element("article", "metric-card");
     const valueNode = element("strong", "metric-value", shown.display);
-    if (shown.numeric !== null && shown.numeric > 0 && ["Total P&L", "Daily P&L", "Total return"].includes(label)) {
+    if (
+      shown.numeric !== null &&
+      shown.numeric > 0 &&
+      (label.includes("P&L") || label.includes("return"))
+    ) {
       valueNode.classList.add("value-positive");
     }
     if (shown.numeric !== null && shown.numeric < 0) {
@@ -236,6 +276,97 @@ function renderMetrics(data) {
       element("span", "metric-context", shown.context),
     );
     target.append(card);
+  }
+}
+
+function renderExperiment(data) {
+  const experiment = data.paper_experiment;
+  const badge = document.getElementById("experiment-badge");
+  badge.textContent = `${experiment.experiment_status.replaceAll("_", " ")} · ${experiment.execution_enabled ? "scheduled execution enabled" : "read only"}`;
+  badge.className = `badge ${experiment.execution_enabled ? "badge-paper" : "badge-disabled"}`;
+
+  const summary = document.getElementById("experiment-summary");
+  clear(summary);
+  const summaryItems = [
+    ["Experiment ID", experiment.experiment_id],
+    ["Classification", experiment.classification],
+    ["Live approved", experiment.live_approved ? "Yes" : "No"],
+    ["Start", experiment.experiment_start ? timestamp(experiment.experiment_start) : "Not started"],
+    ["Clean reconciled sessions", integer(experiment.completed_sessions)],
+    ["Elapsed market sessions", integer(experiment.elapsed_market_sessions)],
+    ["Latest action", requireString(experiment.latest_action_reason, "latest action")],
+    ["Risk decision", requireString(experiment.latest_risk_decision, "risk decision")],
+    ["Reconciliation", requireString(experiment.latest_reconciliation_state, "reconciliation state")],
+  ];
+  for (const [label, value] of summaryItems) {
+    const item = element("div", "experiment-fact");
+    item.append(element("span", "", label), element("strong", "", value));
+    summary.append(item);
+  }
+
+  const progress = document.getElementById("experiment-progress");
+  clear(progress);
+  const checkpoints = [
+    ["20-session operational", experiment.operational_checkpoint],
+    ["60-session initial performance", experiment.initial_performance_checkpoint],
+    ["120-session stronger evidence", experiment.stronger_evidence_checkpoint],
+  ];
+  for (const [label, checkpoint] of checkpoints) {
+    const card = element("article", "checkpoint-card");
+    const track = element("div", "progress-track");
+    track.setAttribute("role", "progressbar");
+    track.setAttribute("aria-label", `${label} clean-session progress`);
+    track.setAttribute("aria-valuemin", "0");
+    track.setAttribute("aria-valuemax", String(checkpoint.required_sessions));
+    track.setAttribute(
+      "aria-valuenow",
+      String(Math.min(checkpoint.completed_sessions, checkpoint.required_sessions)),
+    );
+    const bar = element("div", "progress-value");
+    bar.style.width = `${Math.max(0, Math.min(1, decimalNumber(checkpoint.progress, "checkpoint progress"))) * 100}%`;
+    track.append(bar);
+    card.append(
+      element("span", "", label),
+      element("strong", "", `${integer(checkpoint.completed_sessions)} / ${integer(checkpoint.required_sessions)}`),
+      track,
+    );
+    progress.append(card);
+  }
+
+  const target = document.getElementById("experiment-target");
+  clear(target);
+  if (experiment.target_state === "UNAVAILABLE") {
+    target.append(element("p", "empty-state", "The latest frozen challenger target is unavailable."));
+  } else if (experiment.target_state === "CASH") {
+    target.append(element("p", "empty-state", "The frozen challenger target is cash."));
+  } else {
+    target.append(table(
+      "Frozen challenger target",
+      ["Rank", "Asset", "Target"],
+      experiment.current_target.map((item) => [integer(item.rank), item.symbol, money(item.target_notional)]),
+    ));
+  }
+
+  const benchmarks = document.getElementById("experiment-benchmarks");
+  clear(benchmarks);
+  const benchmarkLabels = {
+    cash: "Cash",
+    equal_weight_buy_and_hold_price_return_gldm_slv_xle:
+      "Equal-weight GLDM / SLV / XLE (price return)",
+    production_cash_only: "Frozen production CASH_ONLY",
+    paper_forward_executed: "Paper-forward executed",
+    paper_forward_frictionless_shadow: "Frictionless frozen challenger shadow",
+  };
+  const benchmarkRows = experiment.benchmarks.map((item) => {
+    const shown = metricDisplay(item.return_metric, "percent");
+    return [benchmarkLabels[item.name] || item.name.replaceAll("_", " "), shown.display, shown.context];
+  });
+  benchmarks.append(table("Prospective benchmark returns", ["Benchmark", "Return", "State"], benchmarkRows));
+
+  const boundaries = document.getElementById("result-boundaries");
+  clear(boundaries);
+  for (const item of experiment.result_boundaries) {
+    boundaries.append(element("div", "boundary-card", requireString(item, "result boundary", 180)));
   }
 }
 
@@ -389,7 +520,8 @@ function renderRisk(data) {
     ["Maximum position size", money(risk.maximum_position_size)],
     ["Combined metals limit", money(risk.metals_exposure_limit)],
     ["Liquidation threshold", money(risk.liquidation_threshold)],
-    ["Execution enabled", risk.execution_enabled ? "Yes" : "No · disabled"],
+    ["Production execution", risk.execution_enabled ? "Enabled" : "Disabled · CASH_ONLY"],
+    ["Paper experiment execution", data.paper_experiment.execution_enabled ? "Enabled behind gates" : "Read only"],
     ["Scheduled shadow gate", `${risk.scheduled_shadow_gate} · ${risk.scheduled_shadow_completed} / ${risk.scheduled_shadow_required}`],
     ["Reconciliation", risk.reconciliation_state],
   ];
@@ -512,6 +644,7 @@ function renderChart(data) {
 function render(data) {
   latestSnapshot = data;
   renderSummary(data);
+  renderExperiment(data);
   renderMetrics(data);
   renderAllocation(data);
   renderSignals(data);
@@ -521,9 +654,7 @@ function render(data) {
   renderHealth(data);
   renderDisclosure(data);
   renderChart(data);
-  if (data.positions.length > 0 || data.performance.fill_count > 0) {
-    document.getElementById("cash-state").classList.add("hidden");
-  }
+  document.getElementById("cash-state").classList.toggle("hidden", data.positions.length > 0);
 }
 
 function showFailure() {

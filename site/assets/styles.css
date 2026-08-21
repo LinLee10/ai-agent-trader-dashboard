@@ -179,6 +179,97 @@ a {
   gap: 0.75rem;
 }
 
+.experiment-panel {
+  margin: 1.5rem 0;
+  border-color: rgb(120 214 197 / 45%);
+  background:
+    linear-gradient(130deg, rgb(120 214 197 / 8%), transparent 45%),
+    rgb(16 24 39 / 96%);
+}
+
+.experiment-panel h3 {
+  margin: 0 0 0.75rem;
+  font-size: 0.9rem;
+}
+
+.experiment-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.6rem;
+}
+
+.experiment-fact {
+  min-width: 0;
+  padding: 0.75rem;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 0.65rem;
+}
+
+.experiment-fact span,
+.checkpoint-card span {
+  display: block;
+  color: var(--muted);
+  font-size: 0.68rem;
+}
+
+.experiment-fact strong,
+.checkpoint-card strong {
+  display: block;
+  margin-top: 0.2rem;
+  font-size: 0.78rem;
+  overflow-wrap: anywhere;
+}
+
+.checkpoint-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.6rem;
+  margin: 0.75rem 0 1rem;
+}
+
+.checkpoint-card {
+  padding: 0.75rem;
+  background: var(--surface-2);
+  border-radius: 0.65rem;
+}
+
+.progress-track {
+  height: 0.45rem;
+  margin-top: 0.6rem;
+  overflow: hidden;
+  background: var(--surface);
+  border-radius: 999px;
+}
+
+.progress-value {
+  height: 100%;
+  background: var(--accent-2);
+}
+
+.experiment-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.boundary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+
+.boundary-card {
+  padding: 0.65rem;
+  color: var(--muted);
+  background: rgb(8 13 24 / 65%);
+  border: 1px solid var(--line);
+  border-radius: 0.55rem;
+  font-size: 0.7rem;
+  line-height: 1.4;
+}
+
 .metric-card {
   min-height: 8.3rem;
   padding: 1rem;
@@ -559,6 +650,11 @@ noscript {
   .card-grid {
     grid-template-columns: 1fr;
   }
+
+  .experiment-summary,
+  .boundary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 680px) {
@@ -579,7 +675,9 @@ noscript {
   .summary-strip,
   .metrics-grid,
   .dashboard-grid,
-  .disclosure-grid {
+  .disclosure-grid,
+  .checkpoint-grid,
+  .experiment-grid {
     grid-template-columns: 1fr 1fr;
   }
 
@@ -596,7 +694,11 @@ noscript {
 @media (max-width: 440px) {
   .summary-strip,
   .metrics-grid,
-  .disclosure-grid {
+  .disclosure-grid,
+  .experiment-summary,
+  .checkpoint-grid,
+  .experiment-grid,
+  .boundary-grid {
     grid-template-columns: 1fr;
   }
 

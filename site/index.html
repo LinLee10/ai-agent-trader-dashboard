@@ -22,19 +22,44 @@
         </div>
         <div class="status-stack" aria-label="Trading status">
           <span class="badge badge-paper">Paper Trading</span>
-          <span class="badge badge-disabled">Execution disabled</span>
+          <span class="badge badge-disabled">Production execution disabled</span>
+          <span id="experiment-badge" class="badge badge-disabled">Paper experiment loading</span>
         </div>
       </header>
 
       <section id="summary-strip" class="summary-strip" aria-label="Current agent status"></section>
+
+      <section class="panel experiment-panel" aria-labelledby="experiment-heading">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">Paper forward · fake money</p>
+            <h2 id="experiment-heading">Frozen momentum experiment</h2>
+          </div>
+          <p class="panel-note">Separate from the production CASH_ONLY decision · never live approved</p>
+        </div>
+        <div id="experiment-summary" class="experiment-summary"></div>
+        <div id="experiment-progress" class="checkpoint-grid"></div>
+        <div class="experiment-grid">
+          <div>
+            <h3>Current challenger target</h3>
+            <div id="experiment-target"></div>
+          </div>
+          <div>
+            <h3>Prospective benchmarks</h3>
+            <div id="experiment-benchmarks"></div>
+          </div>
+        </div>
+        <div id="result-boundaries" class="boundary-grid" aria-label="Evidence boundaries"></div>
+      </section>
+
       <section id="metrics" class="metrics-grid" aria-label="Account and performance metrics"></section>
 
       <section id="cash-state" class="cash-state" aria-live="polite">
         <div class="cash-icon" aria-hidden="true">C</div>
         <div>
           <p class="eyebrow">Intentional current state</p>
-          <h2>The current strategy remains in cash.</h2>
-          <p>No paper trades have been executed yet. Cash is a valid outcome of the frozen candidate-selection policy.</p>
+          <h2>The paper challenger currently has no open position.</h2>
+          <p>No strategy order is manufactured when its frozen signal or operational gates say to remain in cash.</p>
         </div>
       </section>
 
