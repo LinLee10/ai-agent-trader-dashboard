@@ -62,7 +62,7 @@ function validateSnapshot(data) {
     throw new Error("dashboard contract keys are invalid");
   }
   if (
-    root.public_contract_version !== "2.0" ||
+    root.public_contract_version !== "2.1" ||
     root.trading_mode !== "Paper Trading" ||
     root.selected_candidate !== "CASH_ONLY" ||
     root.selected_strategy !== "cash" ||
@@ -289,6 +289,7 @@ function renderExperiment(data) {
   clear(summary);
   const summaryItems = [
     ["Experiment ID", experiment.experiment_id],
+    ["Prospective baseline", experiment.prospective_baseline_version],
     ["Classification", experiment.classification],
     ["Live approved", experiment.live_approved ? "Yes" : "No"],
     ["Start", experiment.experiment_start ? timestamp(experiment.experiment_start) : "Not started"],
@@ -475,9 +476,9 @@ function renderPositions(data) {
     `${position.symbol} · ${position.category}`,
     quantity(position.quantity),
     money(position.market_value),
-    money(position.average_entry_price),
+    position.average_entry_price === null ? "—" : money(position.average_entry_price),
     money(position.current_price),
-    money(position.unrealized_pnl),
+    position.unrealized_pnl === null ? "—" : money(position.unrealized_pnl),
     percent(position.portfolio_weight),
   ]);
   target.append(table("Current paper positions", ["Asset", "Quantity", "Market value", "Avg entry", "Current", "Unrealized P&L", "Weight"], rows));

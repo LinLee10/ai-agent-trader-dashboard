@@ -88,7 +88,7 @@ jobs:
               "risk": {"execution_enabled", "liquidation_threshold", "maximum_gross_exposure", "maximum_position_size", "metals_exposure_limit", "minimum_cash_reserve", "reconciliation_state", "scheduled_shadow_completed", "scheduled_shadow_gate", "scheduled_shadow_required", "strategy_capital_ceiling"},
               "system_health": {"account_status", "broker_environment", "deployment_version", "doctor", "last_workflow_completion", "market_data", "reconciliation", "strategy_version", "workflow_source"},
               "deployment": {"data_freshness", "last_successful_update", "public_contract_version", "update_mode"},
-              "paper_experiment": {"benchmarks", "canary_status", "classification", "completed_sessions", "current_allocation", "current_positions", "current_target", "elapsed_market_sessions", "execution_enabled", "experiment_id", "experiment_start", "experiment_status", "initial_performance_checkpoint", "latest_action_reason", "latest_reconciliation_state", "latest_risk_decision", "live_approved", "operational_checkpoint", "performance", "recent_fills", "result_boundaries", "strategy", "stronger_evidence_checkpoint", "target_state"},
+              "paper_experiment": {"benchmarks", "canary_status", "classification", "completed_sessions", "current_allocation", "current_positions", "current_target", "elapsed_market_sessions", "execution_enabled", "experiment_id", "experiment_start", "experiment_status", "initial_performance_checkpoint", "latest_action_reason", "latest_reconciliation_state", "latest_risk_decision", "live_approved", "operational_checkpoint", "performance", "prospective_baseline_version", "recent_fills", "result_boundaries", "strategy", "stronger_evidence_checkpoint", "target_state"},
               "paper_performance": {"completed_round_trips", "daily_pnl", "fill_count", "maximum_drawdown", "realized_pnl", "total_pnl", "total_return", "trade_count", "unrealized_pnl"},
               "checkpoint": {"completed_sessions", "progress", "required_sessions", "status"},
               "target": {"rank", "symbol", "target_notional"},
@@ -112,8 +112,8 @@ jobs:
               for item in data[name]:
                   exact(item, key)
           if (
-              data["public_contract_version"] != "2.0"
-              or data["deployment"]["public_contract_version"] != "2.0"
+              data["public_contract_version"] != "2.1"
+              or data["deployment"]["public_contract_version"] != "2.1"
               or data["trading_mode"] != "Paper Trading"
               or data["selected_candidate"] != "CASH_ONLY"
               or data["selected_strategy"] != "cash"
@@ -127,8 +127,9 @@ jobs:
               or paper["strategy"] != "Simple Long-Horizon Momentum"
               or paper["classification"] != "PAPER_CHALLENGER_ONLY"
               or paper["live_approved"] is not False
-              or paper["experiment_status"] not in {"PENDING_SHADOW_GATE", "READY_FOR_CANARY", "ACTIVE", "HALTED"}
-              or paper["canary_status"] not in {"PENDING", "PASS", "HALTED"}
+              or paper["experiment_status"] not in {"PENDING_SHADOW_GATE", "READY_FOR_CANARY", "ACTIVE", "RECOVERY_REQUIRED", "BASELINE_PENDING", "HALTED"}
+              or paper["canary_status"] not in {"PENDING", "PASS", "RECOVERED", "HALTED"}
+              or paper["prospective_baseline_version"] not in {"paper-forward-v1", "paper-forward-v1.1"}
               or type(paper["execution_enabled"]) is not bool
           ):
               raise SystemExit("PUBLIC_CONTRACT_PAPER_IDENTITY_INVALID")
@@ -174,8 +175,12 @@ jobs:
           def position_object(item, code):
               exact(item, "position")
               require(item["symbol"] in {"GLDM", "SLV", "XLE"} and isinstance(item["category"], str) and item["category"], code)
-              for field in ("quantity", "market_value", "average_entry_price", "current_price", "unrealized_pnl", "portfolio_weight"):
+              for field in ("quantity", "market_value", "current_price", "portfolio_weight"):
                   decimal_string(item[field], code)
+              for field in ("average_entry_price", "unrealized_pnl"):
+                  require(item[field] is None or isinstance(item[field], str), code)
+                  if item[field] is not None:
+                      decimal_string(item[field], code)
           def fill_object(item, code):
               exact(item, "fill")
               require(item["symbol"] in {"GLDM", "SLV", "XLE"} and item["side"] in {"buy", "sell"}, code)
@@ -214,15 +219,16 @@ jobs:
               require(progress == expected_progress and checkpoint["status"] == expected_status, "PUBLIC_CONTRACT_CHECKPOINT_INVALID")
           if paper["experiment_start"] is not None:
               aware_datetime_string(paper["experiment_start"], "PUBLIC_CONTRACT_PAPER_START_INVALID")
-          require(paper["experiment_status"] != "ACTIVE" or (paper["canary_status"] == "PASS" and paper["experiment_start"] is not None), "PUBLIC_CONTRACT_PAPER_START_INVALID")
+          require(paper["experiment_status"] != "ACTIVE" or (paper["canary_status"] in {"PASS", "RECOVERED"} and paper["experiment_start"] is not None), "PUBLIC_CONTRACT_PAPER_START_INVALID")
           require(paper["canary_status"] != "PASS" or paper["experiment_start"] is not None, "PUBLIC_CONTRACT_PAPER_START_INVALID")
+          require(paper["experiment_status"] != "BASELINE_PENDING" or (paper["canary_status"] == "RECOVERED" and paper["experiment_start"] is None), "PUBLIC_CONTRACT_PAPER_START_INVALID")
           require(not paper["execution_enabled"] or (paper["experiment_status"] in {"READY_FOR_CANARY", "ACTIVE"} and paper["canary_status"] != "HALTED"), "PUBLIC_CONTRACT_PAPER_EXECUTION_INVALID")
           for name in ("latest_action_reason", "latest_risk_decision", "latest_reconciliation_state"):
               require(isinstance(paper[name], str) and paper[name], "PUBLIC_CONTRACT_PAPER_STATUS_INVALID")
           require(paper["target_state"] in {"UNAVAILABLE", "CASH", "ALLOCATED"}, "PUBLIC_CONTRACT_TARGET_INVALID")
-          require(paper["latest_action_reason"] in {"GATE_PENDING", "WAITING_FOR_CANARY", "STRATEGY_CASH", "NO_REBALANCE", "CANARY_PASS", "FILL_RECONCILED", "READ_ONLY", "HALTED"}, "PUBLIC_CONTRACT_PAPER_STATUS_INVALID")
+          require(paper["latest_action_reason"] in {"GATE_PENDING", "WAITING_FOR_CANARY", "STRATEGY_CASH", "NO_REBALANCE", "CANARY_PASS", "FILL_RECONCILED", "RECOVERED_AWAITING_BASELINE", "PROSPECTIVE_BASELINE_STARTED", "READ_ONLY", "HALTED"}, "PUBLIC_CONTRACT_PAPER_STATUS_INVALID")
           require(paper["latest_risk_decision"] in {"NOT_EVALUATED", "APPROVED", "REDUCE_ONLY", "REJECTED"}, "PUBLIC_CONTRACT_PAPER_STATUS_INVALID")
-          require(paper["latest_reconciliation_state"] in {"STARTING_STATE_VERIFIED", "PRE_SUBMIT_EXACT", "EXACT", "HALTED", "READ_ONLY"}, "PUBLIC_CONTRACT_PAPER_STATUS_INVALID")
+          require(paper["latest_reconciliation_state"] in {"STARTING_STATE_VERIFIED", "PRE_SUBMIT_EXACT", "EXACT", "RECOVERY_REQUIRED", "HALTED", "READ_ONLY"}, "PUBLIC_CONTRACT_PAPER_STATUS_INVALID")
           require(paper["result_boundaries"] == ["BACKTEST: retrospective historical research only", "SHADOW: read-only operational evidence", "PAPER FORWARD: simulated Alpaca fake-money results", "LIVE: unsupported and not approved"], "PUBLIC_CONTRACT_BOUNDARIES_INVALID")
           for item in paper["current_target"]:
               exact(item, "target")
@@ -248,7 +254,7 @@ jobs:
               exact(item, "benchmark")
               metric_object(item["return_metric"], "PUBLIC_CONTRACT_BENCHMARK_INVALID", require_as_of=True)
           benchmark_metrics = [item["return_metric"] for item in paper["benchmarks"]]
-          if paper["experiment_start"] is None:
+          if paper["experiment_start"] is None or paper["performance"]["total_return"]["state"] != "available":
               require(all(item["state"] == "unavailable" for item in benchmark_metrics), "PUBLIC_CONTRACT_BENCHMARK_INVALID")
           else:
               require(all(benchmark_metrics[index]["state"] == "available" for index in (0, 1, 2, 4)), "PUBLIC_CONTRACT_BENCHMARK_INVALID")
@@ -262,8 +268,12 @@ jobs:
               decimal_string(item["profit_loss"], "PUBLIC_CONTRACT_EQUITY_TYPE_INVALID")
           for item in data["positions"]:
               require(item["symbol"] in {"GLDM", "SLV", "XLE"} and isinstance(item["category"], str), "PUBLIC_CONTRACT_POSITION_TYPE_INVALID")
-              for name in ("quantity", "market_value", "average_entry_price", "current_price", "unrealized_pnl", "portfolio_weight"):
+              for name in ("quantity", "market_value", "current_price", "portfolio_weight"):
                   decimal_string(item[name], "PUBLIC_CONTRACT_POSITION_TYPE_INVALID")
+              for name in ("average_entry_price", "unrealized_pnl"):
+                  require(item[name] is None or isinstance(item[name], str), "PUBLIC_CONTRACT_POSITION_TYPE_INVALID")
+                  if item[name] is not None:
+                      decimal_string(item[name], "PUBLIC_CONTRACT_POSITION_TYPE_INVALID")
           for item in data["recent_fills"]:
               require(item["symbol"] in {"GLDM", "SLV", "XLE"} and item["side"] in {"buy", "sell"}, "PUBLIC_CONTRACT_FILL_TYPE_INVALID")
               require(isinstance(item["category"], str), "PUBLIC_CONTRACT_FILL_TYPE_INVALID")
